@@ -76,12 +76,8 @@ public class AndroidResourcesUtils {
 	/**
 	 * Force hex format for Android resources ids
 	 */
-	public static boolean handleResourceFieldValue(ClassNode cls, ICodeWriter code, long lit, ArgType type) {
-		if (type.equals(ArgType.INT) && isResourceClass(cls)) {
-			code.add(String.format("0x%08x", lit));
-			return true;
-		}
-		return false;
+	public static boolean isResourceFieldValue(ClassNode cls, ArgType type) {
+		return type.equals(ArgType.INT) && isResourceClass(cls);
 	}
 
 	public static boolean isResourceClass(ClassNode cls) {
@@ -118,7 +114,7 @@ public class AndroidResourcesUtils {
 		}
 		for (ResourceEntry resource : resStorage.getResources()) {
 			String resTypeName = resource.getTypeName();
-			String resName = resTypeName.equals("style") ? resource.getKeyName().replace('.', '_') : resource.getKeyName();
+			String resName = resource.getKeyName().replace('.', '_');
 
 			ResClsInfo typeClsInfo = innerClsMap.computeIfAbsent(
 					resTypeName,
@@ -174,18 +170,17 @@ public class AndroidResourcesUtils {
 	private static Map<Integer, FieldNode> fillResFieldsMap(ClassNode resCls) {
 		Map<Integer, FieldNode> resFieldsMap = new HashMap<>();
 		ConstStorage constStorage = resCls.root().getConstValues();
-		Map<Object, FieldNode> constFields = constStorage.getGlobalConstFields();
-		for (Map.Entry<Object, FieldNode> entry : constFields.entrySet()) {
-			Object key = entry.getKey();
-			FieldNode field = entry.getValue();
-			AccessInfo accessFlags = field.getAccessFlags();
-			if (field.getType().equals(ArgType.INT)
-					&& accessFlags.isStatic()
-					&& accessFlags.isFinal()
+		constStorage.getGlobalConstFields().forEach((key, field) -> {
+			if (field.getFieldInfo().getType().equals(ArgType.INT)
+					&& field instanceof FieldNode
 					&& key instanceof Integer) {
-				resFieldsMap.put((Integer) key, field);
+				FieldNode fldNode = (FieldNode) field;
+				AccessInfo accessFlags = fldNode.getAccessFlags();
+				if (accessFlags.isStatic() && accessFlags.isFinal()) {
+					resFieldsMap.put((Integer) key, fldNode);
+				}
 			}
-		}
+		});
 		return resFieldsMap;
 	}
 }

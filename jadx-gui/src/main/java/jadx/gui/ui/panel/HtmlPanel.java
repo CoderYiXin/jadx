@@ -10,7 +10,7 @@ import javax.swing.JScrollPane;
 
 import jadx.gui.settings.JadxSettings;
 import jadx.gui.treemodel.JNode;
-import jadx.gui.ui.TabbedPane;
+import jadx.gui.ui.tab.TabbedPane;
 import jadx.gui.utils.ui.ZoomActions;
 
 public final class HtmlPanel extends ContentPanel {
@@ -34,7 +34,7 @@ public final class HtmlPanel extends ContentPanel {
 
 	@Override
 	public void loadSettings() {
-		JadxSettings settings = getTabbedPane().getMainWindow().getSettings();
+		JadxSettings settings = getMainWindow().getSettings();
 		textArea.setFont(settings.getFont());
 	}
 

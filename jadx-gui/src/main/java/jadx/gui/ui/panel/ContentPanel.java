@@ -4,9 +4,12 @@ import javax.swing.JPanel;
 
 import org.jetbrains.annotations.Nullable;
 
+import jadx.gui.settings.JadxSettings;
 import jadx.gui.treemodel.JClass;
 import jadx.gui.treemodel.JNode;
-import jadx.gui.ui.TabbedPane;
+import jadx.gui.ui.MainWindow;
+import jadx.gui.ui.tab.TabbedPane;
+import jadx.gui.ui.tab.TabsController;
 
 public abstract class ContentPanel extends JPanel {
 
@@ -15,15 +18,23 @@ public abstract class ContentPanel extends JPanel {
 	protected TabbedPane tabbedPane;
 	protected JNode node;
 
-	protected ContentPanel(TabbedPane panel, JNode jnode) {
+	protected ContentPanel(TabbedPane panel, JNode node) {
 		tabbedPane = panel;
-		node = jnode;
+		this.node = node;
 	}
 
 	public abstract void loadSettings();
 
 	public TabbedPane getTabbedPane() {
 		return tabbedPane;
+	}
+
+	public TabsController getTabsController() {
+		return tabbedPane.getTabsController();
+	}
+
+	public MainWindow getMainWindow() {
+		return tabbedPane.getMainWindow();
 	}
 
 	public JNode getNode() {
@@ -38,11 +49,19 @@ public abstract class ContentPanel extends JPanel {
 	 */
 	@Nullable
 	public String getTabTooltip() {
-		JClass jClass = node.getRootClass();
+		JClass jClass = getNode().getRootClass();
 		if (jClass != null) {
 			return jClass.getFullName();
 		}
-		return node.getName();
+		return getNode().getName();
+	}
+
+	public JadxSettings getSettings() {
+		return tabbedPane.getMainWindow().getSettings();
+	}
+
+	public boolean supportsQuickTabs() {
+		return getNode().supportsQuickTabs();
 	}
 
 	public void dispose() {

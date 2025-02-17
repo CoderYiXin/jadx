@@ -17,7 +17,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.Objects;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
@@ -47,16 +46,13 @@ import org.slf4j.LoggerFactory;
 
 import ch.qos.logback.classic.Level;
 
-import jadx.api.JavaClass;
-import jadx.api.metadata.ICodeAnnotation;
-import jadx.api.metadata.annotations.NodeDeclareRef;
-import jadx.gui.treemodel.JClass;
+import jadx.gui.logs.LogOptions;
 import jadx.gui.treemodel.JNode;
 import jadx.gui.treemodel.JResSearchNode;
 import jadx.gui.ui.MainWindow;
-import jadx.gui.ui.TabbedPane;
 import jadx.gui.ui.codearea.AbstractCodeArea;
 import jadx.gui.ui.panel.ProgressPanel;
+import jadx.gui.ui.tab.TabsController;
 import jadx.gui.utils.CacheObject;
 import jadx.gui.utils.JNodeCache;
 import jadx.gui.utils.JumpPosition;
@@ -71,7 +67,7 @@ public abstract class CommonSearchDialog extends JFrame {
 	private static final Logger LOG = LoggerFactory.getLogger(CommonSearchDialog.class);
 	private static final long serialVersionUID = 8939332306115370276L;
 
-	protected final transient TabbedPane tabbedPane;
+	protected final transient TabsController tabsController;
 	protected final transient CacheObject cache;
 	protected final transient MainWindow mainWindow;
 	protected final transient Font codeFont;
@@ -88,7 +84,7 @@ public abstract class CommonSearchDialog extends JFrame {
 
 	public CommonSearchDialog(MainWindow mainWindow, String title) {
 		this.mainWindow = mainWindow;
-		this.tabbedPane = mainWindow.getTabbedPane();
+		this.tabsController = mainWindow.getTabsController();
 		this.cache = mainWindow.getCacheObject();
 		this.codeFont = mainWindow.getSettings().getFont();
 		this.windowTitle = title;
@@ -116,10 +112,11 @@ public abstract class CommonSearchDialog extends JFrame {
 		}
 	}
 
-	public void updateHighlightContext(String text, boolean caseSensitive, boolean regexp) {
+	public void updateHighlightContext(String text, boolean caseSensitive, boolean regexp, boolean wholeWord) {
 		updateTitle(text);
 		highlightContext = new SearchContext(text);
 		highlightContext.setMatchCase(caseSensitive);
+		highlightContext.setWholeWord(wholeWord);
 		highlightContext.setRegularExpression(regexp);
 		highlightContext.setMarkAll(true);
 	}
@@ -148,45 +145,13 @@ public abstract class CommonSearchDialog extends JFrame {
 	protected void openItem(JNode node) {
 		if (node instanceof JResSearchNode) {
 			JumpPosition jmpPos = new JumpPosition(((JResSearchNode) node).getResNode(), node.getPos());
-			tabbedPane.codeJump(jmpPos);
+			tabsController.codeJump(jmpPos);
 		} else {
-			if (!checkForRedirects(node)) {
-				tabbedPane.codeJump(node);
-			}
+			tabsController.codeJump(node);
 		}
 		if (!mainWindow.getSettings().getKeepCommonDialogOpen()) {
 			dispose();
 		}
-	}
-
-	// TODO: temp solution, move implementation into corresponding nodes
-	private boolean checkForRedirects(JNode node) {
-		if (node instanceof JClass) {
-			JavaClass cls = ((JClass) node).getCls();
-			JavaClass origTopCls = cls.getOriginalTopParentClass();
-			JavaClass codeParent = cls.getTopParentClass();
-			if (Objects.equals(codeParent, origTopCls)) {
-				return false;
-			}
-			JClass jumpCls = mainWindow.getCacheObject().getNodeCache().makeFrom(codeParent);
-			mainWindow.getBackgroundExecutor().execute(
-					NLS.str("progress.load"),
-					jumpCls::loadNode, // load code in background
-					status -> {
-						// search original node in jump class
-						codeParent.getCodeInfo().getCodeMetadata().searchDown(0, (pos, ann) -> {
-							if (ann.getAnnType() == ICodeAnnotation.AnnType.DECLARATION) {
-								if (((NodeDeclareRef) ann).getNode().equals(cls.getClassNode())) {
-									tabbedPane.codeJump(new JumpPosition(jumpCls, pos));
-									return true;
-								}
-							}
-							return null;
-						});
-					});
-			return true;
-		}
-		return false;
 	}
 
 	@Nullable
@@ -305,7 +270,7 @@ public abstract class CommonSearchDialog extends JFrame {
 		progressInfoLabel.addMouseListener(new MouseAdapter() {
 			@Override
 			public void mouseClicked(MouseEvent e) {
-				LogViewerDialog.openWithLevel(mainWindow, Level.INFO);
+				mainWindow.showLogViewer(LogOptions.allWithLevel(Level.INFO));
 			}
 		});
 

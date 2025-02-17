@@ -3,20 +3,25 @@ package jadx.core.utils.files;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,7 +48,31 @@ public class FileUtils {
 	public static final String JADX_TMP_INSTANCE_PREFIX = "jadx-instance-";
 	public static final String JADX_TMP_PREFIX = "jadx-tmp-";
 
+	private static Path tempRootDir = createTempRootDir();
+
 	private FileUtils() {
+		// utility class
+	}
+
+	public static synchronized Path updateTempRootDir(Path newTempRootDir) {
+		try {
+			Path dir = Files.createTempDirectory(newTempRootDir, JADX_TMP_INSTANCE_PREFIX);
+			tempRootDir = dir;
+			dir.toFile().deleteOnExit();
+			return dir;
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to update temp root directory", e);
+		}
+	}
+
+	private static Path createTempRootDir() {
+		try {
+			Path dir = Files.createTempDirectory(JADX_TMP_INSTANCE_PREFIX);
+			dir.toFile().deleteOnExit();
+			return dir;
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to create temp root directory", e);
+		}
 	}
 
 	public static List<Path> expandDirs(List<Path> paths) {
@@ -121,12 +150,12 @@ public class FileUtils {
 			try {
 				deleteDir(dir);
 			} catch (Exception e) {
-				LOG.error("Failed to delete dir: " + dir.toAbsolutePath(), e);
+				LOG.error("Failed to delete dir: {}", dir.toAbsolutePath(), e);
 			}
 		}
 	}
 
-	private static final SimpleFileVisitor<Path> FILE_DELETE_VISITOR = new SimpleFileVisitor<Path>() {
+	private static final SimpleFileVisitor<Path> FILE_DELETE_VISITOR = new SimpleFileVisitor<>() {
 		@Override
 		public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
 			Files.delete(file);
@@ -148,36 +177,35 @@ public class FileUtils {
 		}
 	}
 
-	private static final Path TEMP_ROOT_DIR = createTempRootDir();
-
-	private static Path createTempRootDir() {
-		try {
-			String jadxTmpDir = System.getenv("JADX_TMP_DIR");
-			Path dir;
-			if (jadxTmpDir != null) {
-				dir = Files.createTempDirectory(Paths.get(jadxTmpDir), "jadx-instance-");
-			} else {
-				dir = Files.createTempDirectory(JADX_TMP_INSTANCE_PREFIX);
-			}
-			dir.toFile().deleteOnExit();
-			return dir;
-		} catch (Exception e) {
-			throw new JadxRuntimeException("Failed to create temp root directory", e);
-		}
-	}
-
-	public static void deleteTempRootDir() {
-		deleteDirIfExists(TEMP_ROOT_DIR);
-	}
-
 	public static void clearTempRootDir() {
-		deleteDirIfExists(TEMP_ROOT_DIR);
-		makeDirs(TEMP_ROOT_DIR);
+		clearDir(tempRootDir);
+	}
+
+	public static void clearDir(Path clearDir) {
+		try {
+			Files.walkFileTree(clearDir, Collections.emptySet(), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
+				@Override
+				public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+					Files.delete(file);
+					return FileVisitResult.CONTINUE;
+				}
+
+				@Override
+				public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+					if (!dir.equals(clearDir)) {
+						Files.delete(dir);
+					}
+					return FileVisitResult.CONTINUE;
+				}
+			});
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to clear directory " + clearDir, e);
+		}
 	}
 
 	public static Path createTempDir(String prefix) {
 		try {
-			Path dir = Files.createTempDirectory(TEMP_ROOT_DIR, prefix);
+			Path dir = Files.createTempDirectory(tempRootDir, prefix);
 			dir.toFile().deleteOnExit();
 			return dir;
 		} catch (Exception e) {
@@ -187,7 +215,7 @@ public class FileUtils {
 
 	public static Path createTempFile(String suffix) {
 		try {
-			Path path = Files.createTempFile(TEMP_ROOT_DIR, JADX_TMP_PREFIX, suffix);
+			Path path = Files.createTempFile(tempRootDir, JADX_TMP_PREFIX, suffix);
 			path.toFile().deleteOnExit();
 			return path;
 		} catch (Exception e) {
@@ -200,6 +228,16 @@ public class FileUtils {
 			return Files.createTempFile(Files.createTempDirectory("jadx-persist"), "jadx-", suffix);
 		} catch (Exception e) {
 			throw new JadxRuntimeException("Failed to create temp file with suffix: " + suffix, e);
+		}
+	}
+
+	public static Path createTempFileNonPrefixed(String fileName) {
+		try {
+			Path path = Files.createFile(tempRootDir.resolve(fileName));
+			path.toFile().deleteOnExit();
+			return path;
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to create non-prefixed temp file: " + fileName, e);
 		}
 	}
 
@@ -234,12 +272,31 @@ public class FileUtils {
 
 	public static void writeFile(Path file, String data) throws IOException {
 		FileUtils.makeDirsForFile(file);
-		Files.write(file, data.getBytes(StandardCharsets.UTF_8),
+		Files.writeString(file, data, StandardCharsets.UTF_8,
 				StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 	}
 
+	public static void writeFile(Path file, InputStream is) throws IOException {
+		FileUtils.makeDirsForFile(file);
+		Files.copy(is, file, StandardCopyOption.REPLACE_EXISTING);
+	}
+
 	public static String readFile(Path textFile) throws IOException {
-		return new String(Files.readAllBytes(textFile), StandardCharsets.UTF_8);
+		return Files.readString(textFile);
+	}
+
+	public static boolean renameFile(Path sourcePath, Path targetPath) {
+		try {
+			Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+			return true;
+		} catch (NoSuchFileException e) {
+			LOG.error("File to rename not found {}", sourcePath, e);
+		} catch (FileAlreadyExistsException e) {
+			LOG.error("File with that name already exists {}", targetPath, e);
+		} catch (IOException e) {
+			LOG.error("Error renaming file {}", e.getMessage(), e);
+		}
+		return false;
 	}
 
 	@NotNull
@@ -341,12 +398,28 @@ public class FileUtils {
 		return Stream.of(files).map(File::toPath).collect(Collectors.toList());
 	}
 
+	public static List<Path> toPathsWithTrim(File[] files) {
+		return Stream.of(files).map(FileUtils::toPathWithTrim).collect(Collectors.toList());
+	}
+
+	public static Path toPathWithTrim(File file) {
+		return toPathWithTrim(file.getPath());
+	}
+
+	public static Path toPathWithTrim(String file) {
+		return Path.of(file.trim());
+	}
+
 	public static List<Path> fileNamesToPaths(List<String> fileNames) {
 		return fileNames.stream().map(Paths::get).collect(Collectors.toList());
 	}
 
 	public static List<File> toFiles(List<Path> paths) {
 		return paths.stream().map(Path::toFile).collect(Collectors.toList());
+	}
+
+	public static String md5Sum(String str) {
+		return md5Sum(str.getBytes(StandardCharsets.UTF_8));
 	}
 
 	public static String md5Sum(byte[] data) {
@@ -356,6 +429,26 @@ public class FileUtils {
 			return bytesToHex(md.digest());
 		} catch (Exception e) {
 			throw new JadxRuntimeException("Failed to build hash", e);
+		}
+	}
+
+	/**
+	 * Hash timestamps of input files
+	 */
+	public static String buildInputsHash(List<Path> inputPaths) {
+		try (ByteArrayOutputStream bout = new ByteArrayOutputStream();
+				DataOutputStream data = new DataOutputStream(bout)) {
+			List<Path> inputFiles = FileUtils.expandDirs(inputPaths);
+			Collections.sort(inputFiles);
+			data.write(inputPaths.size());
+			data.write(inputFiles.size());
+			for (Path inputFile : inputFiles) {
+				FileTime modifiedTime = Files.getLastModifiedTime(inputFile);
+				data.writeLong(modifiedTime.toMillis());
+			}
+			return FileUtils.md5Sum(bout.toByteArray());
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Failed to build hash for inputs", e);
 		}
 	}
 }

@@ -1,7 +1,5 @@
 package jadx.gui.ui.codearea;
 
-import java.awt.event.KeyEvent;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -12,14 +10,10 @@ import org.apache.commons.text.StringEscapeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import jadx.api.ICodeInfo;
 import jadx.api.JavaClass;
 import jadx.api.JavaField;
 import jadx.api.JavaMethod;
-import jadx.api.metadata.ICodeNodeRef;
-import jadx.api.metadata.annotations.NodeDeclareRef;
 import jadx.api.metadata.annotations.VarNode;
-import jadx.api.utils.CodeUtils;
 import jadx.core.codegen.TypeGen;
 import jadx.core.dex.info.MethodInfo;
 import jadx.core.dex.instructions.args.ArgType;
@@ -29,18 +23,16 @@ import jadx.gui.treemodel.JClass;
 import jadx.gui.treemodel.JField;
 import jadx.gui.treemodel.JMethod;
 import jadx.gui.treemodel.JNode;
+import jadx.gui.ui.action.ActionModel;
 import jadx.gui.utils.NLS;
 import jadx.gui.utils.UiUtils;
-
-import static javax.swing.KeyStroke.getKeyStroke;
 
 public final class FridaAction extends JNodeAction {
 	private static final Logger LOG = LoggerFactory.getLogger(FridaAction.class);
 	private static final long serialVersionUID = -3084073927621269039L;
 
 	public FridaAction(CodeArea codeArea) {
-		super(NLS.str("popup.frida") + " (f)", codeArea);
-		addKeyBinding(getKeyStroke(KeyEvent.VK_F, 0), "trigger frida");
+		super(ActionModel.FRIDA_COPY, codeArea);
 	}
 
 	@Override
@@ -66,7 +58,7 @@ public final class FridaAction extends JNodeAction {
 			return generateMethodSnippet((JMethod) node);
 		}
 		if (node instanceof JClass) {
-			return generateClassSnippet((JClass) node);
+			return generateClassAllMethodSnippet((JClass) node);
 		}
 		if (node instanceof JField) {
 			return generateFieldSnippet((JField) node);
@@ -75,7 +67,15 @@ public final class FridaAction extends JNodeAction {
 	}
 
 	private String generateMethodSnippet(JMethod jMth) {
-		MethodNode mth = jMth.getJavaMethod().getMethodNode();
+		return getMethodSnippet(jMth.getJavaMethod(), jMth.getJParent());
+	}
+
+	private String generateMethodSnippet(JavaMethod javaMethod, JClass jc) {
+		return getMethodSnippet(javaMethod, jc);
+	}
+
+	private String getMethodSnippet(JavaMethod javaMethod, JClass jc) {
+		MethodNode mth = javaMethod.getMethodNode();
 		MethodInfo methodInfo = mth.getMethodInfo();
 		String methodName;
 		String newMethodName;
@@ -94,7 +94,8 @@ public final class FridaAction extends JNodeAction {
 		} else {
 			overload = "";
 		}
-		List<String> argNames = collectMethodArgNames(jMth.getJavaMethod());
+		List<String> argNames = mth.collectArgNodes().stream()
+				.map(VarNode::getName).collect(Collectors.toList());
 		String args = String.join(", ", argNames);
 		String logArgs;
 		if (argNames.isEmpty()) {
@@ -102,8 +103,8 @@ public final class FridaAction extends JNodeAction {
 		} else {
 			logArgs = ": " + argNames.stream().map(arg -> arg + "=${" + arg + "}").collect(Collectors.joining(", "));
 		}
-		String shortClassName = mth.getParentClass().getShortName();
-		String classSnippet = generateClassSnippet(jMth.getJParent());
+		String shortClassName = mth.getParentClass().getAlias();
+		String classSnippet = generateClassSnippet(jc);
 		if (methodInfo.isConstructor() || methodInfo.getReturnType() == ArgType.VOID) {
 			// no return value
 			return classSnippet + "\n"
@@ -121,38 +122,20 @@ public final class FridaAction extends JNodeAction {
 				+ "};";
 	}
 
-	private List<String> collectMethodArgNames(JavaMethod javaMethod) {
-		ICodeInfo codeInfo = javaMethod.getTopParentClass().getCodeInfo();
-		int mthDefPos = javaMethod.getDefPos();
-		int lineEndPos = CodeUtils.getLineEndForPos(codeInfo.getCodeStr(), mthDefPos);
-		List<String> argNames = new ArrayList<>();
-		codeInfo.getCodeMetadata().searchDown(mthDefPos, (pos, ann) -> {
-			if (pos > lineEndPos) {
-				return Boolean.TRUE; // stop at line end
-			}
-			if (ann instanceof NodeDeclareRef) {
-				ICodeNodeRef declRef = ((NodeDeclareRef) ann).getNode();
-				if (declRef instanceof VarNode) {
-					VarNode varNode = (VarNode) declRef;
-					if (varNode.getMth().equals(javaMethod.getMethodNode())) {
-						argNames.add(varNode.getName());
-					}
-				}
-			}
-			return null;
-		});
-		int argsCount = javaMethod.getMethodNode().getMethodInfo().getArgsCount();
-		if (argNames.size() != argsCount) {
-			LOG.warn("Incorrect args count, expected: {}, got: {}", argsCount, argNames.size());
-		}
-		return argNames;
-	}
-
 	private String generateClassSnippet(JClass jc) {
 		JavaClass javaClass = jc.getCls();
 		String rawClassName = StringEscapeUtils.escapeEcmaScript(javaClass.getRawName());
 		String shortClassName = javaClass.getName();
 		return String.format("let %s = Java.use(\"%s\");", shortClassName, rawClassName);
+	}
+
+	private String generateClassAllMethodSnippet(JClass jc) {
+		JavaClass javaClass = jc.getCls();
+		String result = "";
+		for (JavaMethod javaMethod : javaClass.getMethods()) {
+			result = result + generateMethodSnippet(javaMethod, jc) + "\n";
+		}
+		return result;
 	}
 
 	private String generateFieldSnippet(JField jf) {

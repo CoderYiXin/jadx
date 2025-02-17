@@ -8,26 +8,35 @@ import java.util.Set;
 import org.jetbrains.annotations.Nullable;
 
 import jadx.api.JavaClass;
+import jadx.gui.JadxWrapper;
 import jadx.gui.ui.dialog.SearchDialog;
+import jadx.gui.utils.pkgs.PackageHelper;
 
 public class CacheObject {
+	private final JadxWrapper wrapper;
+	private final JNodeCache jNodeCache;
+	private final PackageHelper packageHelper;
 
 	private String lastSearch;
-	private JNodeCache jNodeCache;
 	private Map<SearchDialog.SearchPreset, Set<SearchDialog.SearchOptions>> lastSearchOptions;
+	private String lastSearchPackage;
 
 	private List<List<JavaClass>> decompileBatches;
 
 	private volatile boolean fullDecompilationFinished;
 
-	public CacheObject() {
+	public CacheObject(JadxWrapper wrapper) {
+		this.wrapper = wrapper;
+		this.jNodeCache = new JNodeCache(wrapper);
+		this.packageHelper = new PackageHelper(wrapper, jNodeCache);
 		reset();
 	}
 
 	public void reset() {
 		lastSearch = null;
-		jNodeCache = new JNodeCache();
+		jNodeCache.reset();
 		lastSearchOptions = new HashMap<>();
+		lastSearchPackage = null;
 		decompileBatches = null;
 		fullDecompilationFinished = false;
 	}
@@ -37,8 +46,17 @@ public class CacheObject {
 		return lastSearch;
 	}
 
+	@Nullable
+	public String getLastSearchPackage() {
+		return lastSearchPackage;
+	}
+
 	public void setLastSearch(String lastSearch) {
 		this.lastSearch = lastSearch;
+	}
+
+	public void setLastSearchPackage(String lastSearchPackage) {
+		this.lastSearchPackage = lastSearchPackage;
 	}
 
 	public JNodeCache getNodeCache() {
@@ -55,6 +73,10 @@ public class CacheObject {
 
 	public void setDecompileBatches(List<List<JavaClass>> decompileBatches) {
 		this.decompileBatches = decompileBatches;
+	}
+
+	public PackageHelper getPackageHelper() {
+		return packageHelper;
 	}
 
 	public boolean isFullDecompilationFinished() {

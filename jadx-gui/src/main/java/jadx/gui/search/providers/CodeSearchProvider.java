@@ -7,11 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.api.ICodeCache;
-import jadx.api.ICodeWriter;
 import jadx.api.JavaClass;
 import jadx.api.JavaNode;
 import jadx.api.metadata.ICodeMetadata;
 import jadx.api.metadata.ICodeNodeRef;
+import jadx.api.utils.CodeUtils;
 import jadx.gui.JadxWrapper;
 import jadx.gui.jobs.Cancelable;
 import jadx.gui.search.SearchSettings;
@@ -45,12 +45,14 @@ public final class CodeSearchProvider extends BaseSearchProvider {
 				return null;
 			}
 			JavaClass cls = classes.get(clsNum);
-			if (!cls.getClassNode().isInner()) {
-				if (code == null) {
-					code = getClassCode(cls, codeCache);
-				}
-				JNode newResult = searchNext(cls, code);
+			String clsCode = code;
+			if (clsCode == null && !cls.isInner() && !cls.isNoCode()) {
+				clsCode = getClassCode(cls, codeCache);
+			}
+			if (clsCode != null) {
+				JNode newResult = searchNext(cls, clsCode);
 				if (newResult != null) {
+					code = clsCode;
 					return newResult;
 				}
 			}
@@ -66,8 +68,8 @@ public final class CodeSearchProvider extends BaseSearchProvider {
 		if (newPos == -1) {
 			return null;
 		}
-		int lineStart = 1 + clsCode.lastIndexOf(ICodeWriter.NL, newPos);
-		int lineEnd = clsCode.indexOf(ICodeWriter.NL, newPos);
+		int lineStart = 1 + CodeUtils.getNewLinePosBefore(clsCode, newPos);
+		int lineEnd = CodeUtils.getNewLinePosAfter(clsCode, newPos);
 		int end = lineEnd == -1 ? clsCode.length() : lineEnd;
 		String line = clsCode.substring(lineStart, end);
 		this.pos = end;

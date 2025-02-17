@@ -5,19 +5,27 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import jadx.api.ICodeInfo;
 import jadx.api.JavaMethod;
+import jadx.api.metadata.ICodeNodeRef;
+import jadx.api.metadata.annotations.NodeDeclareRef;
+import jadx.api.metadata.annotations.VarNode;
 import jadx.api.plugins.input.data.ICodeReader;
 import jadx.api.plugins.input.data.IDebugInfo;
 import jadx.api.plugins.input.data.IMethodData;
 import jadx.api.plugins.input.data.attributes.JadxAttrType;
 import jadx.api.plugins.input.data.attributes.types.ExceptionsAttr;
+import jadx.api.utils.CodeUtils;
 import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.nodes.LoopInfo;
+import jadx.core.dex.attributes.nodes.MethodOverrideAttr;
 import jadx.core.dex.attributes.nodes.NotificationAttrNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.AccessInfo.AFType;
@@ -30,6 +38,7 @@ import jadx.core.dex.instructions.args.SSAVar;
 import jadx.core.dex.nodes.utils.TypeUtils;
 import jadx.core.dex.regions.Region;
 import jadx.core.dex.trycatch.ExceptionHandler;
+import jadx.core.dex.visitors.InitCodeVariables;
 import jadx.core.utils.Utils;
 import jadx.core.utils.exceptions.DecodeException;
 import jadx.core.utils.exceptions.JadxRuntimeException;
@@ -245,6 +254,36 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return mthInfo.getReturnType().equals(ArgType.VOID);
 	}
 
+	public List<VarNode> collectArgNodes() {
+		ICodeInfo codeInfo = getTopParentClass().getCode();
+		int mthDefPos = getDefPosition();
+		int lineEndPos = CodeUtils.getLineEndForPos(codeInfo.getCodeStr(), mthDefPos);
+		int argsCount = mthInfo.getArgsCount();
+		List<VarNode> args = new ArrayList<>(argsCount);
+		codeInfo.getCodeMetadata().searchDown(mthDefPos, (pos, ann) -> {
+			if (pos > lineEndPos) {
+				// Stop at line end
+				return Boolean.TRUE;
+			}
+			if (ann instanceof NodeDeclareRef) {
+				ICodeNodeRef declRef = ((NodeDeclareRef) ann).getNode();
+				if (declRef instanceof VarNode) {
+					VarNode varNode = (VarNode) declRef;
+					if (!varNode.getMth().equals(this)) {
+						// Stop if we've gone too far and have entered a different method
+						return Boolean.TRUE;
+					}
+					args.add(varNode);
+				}
+			}
+			return null;
+		});
+		if (args.size() != argsCount) {
+			LOG.warn("Incorrect args count, expected: {}, got: {}", argsCount, args.size());
+		}
+		return args;
+	}
+
 	public List<RegisterArg> getArgRegs() {
 		if (argsList == null) {
 			throw new JadxRuntimeException("Method arg registers not loaded: " + this
@@ -286,6 +325,11 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return mthInfo.getAlias();
 	}
 
+	@Override
+	public ClassNode getDeclaringClass() {
+		return parentClass;
+	}
+
 	public ClassNode getParentClass() {
 		return parentClass;
 	}
@@ -322,10 +366,13 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 
 	public void setBasicBlocks(List<BlockNode> blocks) {
 		this.blocks = blocks;
-		int i = 0;
-		for (BlockNode block : blocks) {
-			block.setId(i);
-			i++;
+		updateBlockIds(blocks);
+	}
+
+	public void updateBlockIds(List<BlockNode> blocks) {
+		int count = blocks.size();
+		for (int i = 0; i < count; i++) {
+			blocks.get(i).setId(i);
 		}
 	}
 
@@ -353,12 +400,16 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return exitBlock.getPredecessors();
 	}
 
-	public boolean isPreExitBlocks(BlockNode block) {
+	public boolean isPreExitBlock(BlockNode block) {
 		List<BlockNode> successors = block.getSuccessors();
 		if (successors.size() == 1) {
 			return successors.get(0).equals(exitBlock);
 		}
 		return exitBlock.getPredecessors().contains(block);
+	}
+
+	public void resetLoops() {
+		this.loops = new ArrayList<>();
 	}
 
 	public void registerLoop(LoopInfo loop) {
@@ -482,6 +533,24 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return argsStartReg;
 	}
 
+	/**
+	 * Create new fake register arg.
+	 */
+	public RegisterArg makeSyntheticRegArg(ArgType type) {
+		RegisterArg arg = InsnArg.reg(0, type);
+		arg.add(AFlag.SYNTHETIC);
+		SSAVar ssaVar = makeNewSVar(arg);
+		InitCodeVariables.initCodeVar(ssaVar);
+		ssaVar.setType(type);
+		return arg;
+	}
+
+	public RegisterArg makeSyntheticRegArg(ArgType type, String name) {
+		RegisterArg arg = makeSyntheticRegArg(type);
+		arg.setName(name);
+		return arg;
+	}
+
 	public SSAVar makeNewSVar(@NotNull RegisterArg assignArg) {
 		int regNum = assignArg.getRegNum();
 		return makeNewSVar(regNum, getNextSVarVersion(regNum), assignArg);
@@ -572,8 +641,20 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		noCode = true;
 	}
 
+	@Override
+	public void rename(String newName) {
+		MethodOverrideAttr overrideAttr = get(AType.METHOD_OVERRIDE);
+		if (overrideAttr != null) {
+			for (MethodNode relatedMth : overrideAttr.getRelatedMthNodes()) {
+				relatedMth.getMethodInfo().setAlias(newName);
+			}
+		} else {
+			mthInfo.setAlias(newName);
+		}
+	}
+
 	/**
-	 * Calculate instructions count at currect stage
+	 * Calculate instructions count at current stage
 	 */
 	public long countInsns() {
 		if (instructions != null) {
@@ -592,6 +673,13 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return insnsCount;
 	}
 
+	/**
+	 * Returns method code with comments and annotations
+	 */
+	public String getCodeStr() {
+		return CodeUtils.extractMethodCode(this, getTopParentClass().getCode());
+	}
+
 	@Override
 	public boolean isVarArg() {
 		return accFlags.isVarArgs();
@@ -601,7 +689,7 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return loaded;
 	}
 
-	public ICodeReader getCodeReader() {
+	public @Nullable ICodeReader getCodeReader() {
 		return codeReader;
 	}
 
@@ -617,6 +705,7 @@ public class MethodNode extends NotificationAttrNode implements IMethodDetails, 
 		return javaNode;
 	}
 
+	@ApiStatus.Internal
 	public void setJavaNode(JavaMethod javaNode) {
 		this.javaNode = javaNode;
 	}

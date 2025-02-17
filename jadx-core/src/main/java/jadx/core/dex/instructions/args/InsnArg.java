@@ -13,11 +13,12 @@ import jadx.core.dex.instructions.InsnType;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.utils.InsnRemover;
+import jadx.core.utils.InsnUtils;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
 /**
- * Instruction argument,
- * argument can be register, literal or instruction
+ * Instruction argument.
+ * Can be: register, literal, instruction or name
  */
 public abstract class InsnArg extends Typed {
 
@@ -132,6 +133,10 @@ public abstract class InsnArg extends Typed {
 		}
 		InsnArg arg = wrapInsnIntoArg(insn);
 		InsnArg oldArg = parent.getArg(i);
+		if (arg.getType() == ArgType.UNKNOWN) {
+			// restore arg type if wrapped insn missing result
+			arg.setType(oldArg.getType());
+		}
 		parent.setArg(i, arg);
 		InsnRemover.unbindArgUsage(mth, oldArg);
 		if (unbind) {
@@ -209,7 +214,20 @@ public abstract class InsnArg extends Typed {
 	}
 
 	public boolean isZeroLiteral() {
-		return isLiteral() && (((LiteralArg) this)).getLiteral() == 0;
+		return false;
+	}
+
+	public boolean isZeroConst() {
+		if (isZeroLiteral()) {
+			return true;
+		}
+		if (isInsnWrap()) {
+			InsnNode wrapInsn = ((InsnWrapArg) this).getWrapInsn();
+			if (wrapInsn.getType() == InsnType.CONST) {
+				return wrapInsn.getArg(0).isZeroLiteral();
+			}
+		}
+		return false;
 	}
 
 	public boolean isFalse() {
@@ -265,10 +283,27 @@ public abstract class InsnArg extends Typed {
 	}
 
 	public boolean isSameVar(RegisterArg arg) {
+		if (arg == null) {
+			return false;
+		}
 		if (isRegister()) {
 			return ((RegisterArg) this).sameRegAndSVar(arg);
 		}
 		return false;
+	}
+
+	public boolean isSameCodeVar(RegisterArg arg) {
+		if (arg == null) {
+			return false;
+		}
+		if (isRegister()) {
+			return ((RegisterArg) this).sameCodeVar(arg);
+		}
+		return false;
+	}
+
+	public boolean isUseVar(RegisterArg arg) {
+		return InsnUtils.containsVar(this, arg);
 	}
 
 	protected final <T extends InsnArg> T copyCommonParams(T copy) {
@@ -279,5 +314,9 @@ public abstract class InsnArg extends Typed {
 
 	public InsnArg duplicate() {
 		return this;
+	}
+
+	public String toShortString() {
+		return this.toString();
 	}
 }

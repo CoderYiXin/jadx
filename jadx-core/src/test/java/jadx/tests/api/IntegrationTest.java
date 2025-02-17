@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -29,45 +30,45 @@ import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.api.CommentsLevel;
 import jadx.api.DecompilationMode;
 import jadx.api.ICodeInfo;
-import jadx.api.ICodeWriter;
 import jadx.api.JadxArgs;
 import jadx.api.JadxDecompiler;
 import jadx.api.JadxInternalAccess;
 import jadx.api.JavaClass;
-import jadx.api.args.DeobfuscationMapFileMode;
+import jadx.api.JavaMethod;
+import jadx.api.JavaVariable;
+import jadx.api.args.GeneratedRenamesMappingFileMode;
+import jadx.api.data.IJavaNodeRef;
+import jadx.api.data.impl.JadxCodeData;
+import jadx.api.data.impl.JadxCodeRename;
+import jadx.api.data.impl.JadxNodeRef;
 import jadx.api.metadata.ICodeMetadata;
 import jadx.api.metadata.annotations.InsnCodeOffset;
+import jadx.api.metadata.annotations.VarNode;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.nodes.RootNode;
-import jadx.core.utils.DebugChecks;
 import jadx.core.utils.Utils;
 import jadx.core.utils.exceptions.JadxRuntimeException;
-import jadx.core.utils.files.FileUtils;
 import jadx.core.xmlgen.ResourceStorage;
 import jadx.core.xmlgen.entry.ResourceEntry;
 import jadx.tests.api.compiler.CompilerOptions;
 import jadx.tests.api.compiler.JavaUtils;
 import jadx.tests.api.compiler.TestCompiler;
+import jadx.tests.api.utils.TestFilesGetter;
 import jadx.tests.api.utils.TestUtils;
 
 import static org.apache.commons.lang3.StringUtils.leftPad;
 import static org.apache.commons.lang3.StringUtils.rightPad;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.empty;
-import static org.hamcrest.Matchers.emptyArray;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.not;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 public abstract class IntegrationTest extends TestUtils {
 	private static final Logger LOG = LoggerFactory.getLogger(IntegrationTest.class);
@@ -116,12 +117,10 @@ public abstract class IntegrationTest extends TestUtils {
 	 */
 	private boolean forceDecompiledCheck = false;
 
-	static {
-		// enable debug checks
-		DebugChecks.checksEnabled = true;
-	}
-
 	protected JadxDecompiler jadxDecompiler;
+
+	@TempDir
+	Path testDir;
 
 	@BeforeEach
 	public void init() {
@@ -132,19 +131,24 @@ public abstract class IntegrationTest extends TestUtils {
 		this.useJavaInput = null;
 
 		args = new JadxArgs();
-		args.setOutDir(new File("test-out-tmp"));
+		args.setOutDir(testDir.toFile());
 		args.setShowInconsistentCode(true);
 		args.setThreadsCount(1);
 		args.setSkipResources(true);
-		args.setFsCaseSensitive(false); // use same value on all systems
 		args.setCommentsLevel(CommentsLevel.DEBUG);
 		args.setDeobfuscationOn(false);
-		args.setDeobfuscationMapFileMode(DeobfuscationMapFileMode.IGNORE);
+		args.setGeneratedRenamesMappingFileMode(GeneratedRenamesMappingFileMode.IGNORE);
+		args.setRunDebugChecks(true);
+		args.setFilesGetter(new TestFilesGetter(testDir));
+
+		// use the same values on all systems
+		args.setFsCaseSensitive(false);
+		args.setCodeNewLineStr("\n");
+		args.setCodeIndentStr(JadxArgs.DEFAULT_INDENT_STR);
 	}
 
 	@AfterEach
 	public void after() throws IOException {
-		FileUtils.clearTempRootDir();
 		close(jadxDecompiler);
 		close(sourceCompiler);
 		close(decompiledCompiler);
@@ -157,7 +161,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	public void setOutDirSuffix(String suffix) {
-		args.setOutDir(new File("test-out-" + suffix + "-tmp"));
+		args.setOutDir(new File(testDir.toFile(), suffix));
 	}
 
 	public String getTestName() {
@@ -171,7 +175,7 @@ public abstract class IntegrationTest extends TestUtils {
 	public ClassNode getClassNode(Class<?> clazz) {
 		try {
 			List<File> files = compileClass(clazz);
-			assertThat("File list is empty", files, not(empty()));
+			assertThat(files).as("File list is empty").isNotEmpty();
 			return getClassNodeFromFiles(files, clazz.getName());
 		} catch (Exception e) {
 			LOG.error("Failed to get class node", e);
@@ -182,10 +186,10 @@ public abstract class IntegrationTest extends TestUtils {
 
 	public List<ClassNode> getClassNodes(Class<?>... classes) {
 		try {
-			assertThat("Class list is empty", classes, not(emptyArray()));
+			assertThat(classes).as("Class list is empty").isNotEmpty();
 			List<File> srcFiles = Stream.of(classes).map(this::getSourceFileForClass).collect(Collectors.toList());
 			List<File> clsFiles = compileSourceFiles(srcFiles);
-			assertThat("Class files list is empty", clsFiles, not(empty()));
+			assertThat(clsFiles).as("Class files list is empty").isNotEmpty();
 			return decompileFiles(clsFiles);
 		} catch (Exception e) {
 			LOG.error("Failed to get class node", e);
@@ -199,9 +203,9 @@ public abstract class IntegrationTest extends TestUtils {
 		RootNode root = JadxInternalAccess.getRoot(jadxDecompiler);
 
 		ClassNode cls = root.resolveClass(clsName);
-		assertThat("Class not found: " + clsName, cls, notNullValue());
+		assertThat(cls).as("Class not found: " + clsName).isNotNull();
 		if (removeParentClassOnInput) {
-			assertThat(clsName, is(cls.getClassInfo().getFullName()));
+			assertThat(clsName).isEqualTo(cls.getClassInfo().getFullName());
 		} else {
 			LOG.info("Convert back to top level: {}", cls);
 			cls.getTopParentClass().decompile(); // keep correct process order
@@ -310,7 +314,7 @@ public abstract class IntegrationTest extends TestUtils {
 	private void printCodeWithLineNumbers(ICodeInfo code) {
 		String codeStr = code.getCodeStr();
 		Map<Integer, Integer> lineMapping = code.getCodeMetadata().getLineMapping();
-		String[] lines = codeStr.split(ICodeWriter.NL);
+		String[] lines = codeStr.split("\\R");
 		for (int i = 0; i < lines.length; i++) {
 			String line = lines[i];
 			int curLine = i + 1;
@@ -327,8 +331,9 @@ public abstract class IntegrationTest extends TestUtils {
 		String codeStr = code.getCodeStr();
 		ICodeMetadata metadata = code.getCodeMetadata();
 		int lineStartPos = 0;
-		int newLineLen = ICodeWriter.NL.length();
-		for (String line : codeStr.split(ICodeWriter.NL)) {
+		String newLineStr = args.getCodeNewLineStr();
+		int newLineLen = newLineStr.length();
+		for (String line : codeStr.split(newLineStr)) {
 			Object ann = metadata.getAt(lineStartPos);
 			String offsetStr = "";
 			if (ann instanceof InsnCodeOffset) {
@@ -344,7 +349,7 @@ public abstract class IntegrationTest extends TestUtils {
 		if (resMap.isEmpty()) {
 			return;
 		}
-		ResourceStorage resStorage = new ResourceStorage();
+		ResourceStorage resStorage = new ResourceStorage(root.getArgs().getSecurity());
 		for (Map.Entry<Integer, String> entry : resMap.entrySet()) {
 			Integer id = entry.getKey();
 			String name = entry.getValue();
@@ -468,7 +473,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	public Object invoke(TestCompiler compiler, String clsFullName, String method) throws Exception {
-		assertNotNull(compiler, "compiler not ready");
+		assertThat(compiler).as("compiler not ready").isNotNull();
 		return compiler.invoke(clsFullName, method, new Class<?>[] {}, new Object[] {});
 	}
 
@@ -501,7 +506,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	private List<File> compileSourceFiles(List<File> compileFileList) throws IOException {
-		Path outTmp = FileUtils.createTempDir("jadx-tmp-classes");
+		Path outTmp = Files.createTempDirectory(testDir, "jadx-tmp-classes");
 		sourceCompiler = new TestCompiler(compilerOptions);
 		List<File> files = sourceCompiler.compileFiles(compileFileList, outTmp);
 		if (saveTestJar) {
@@ -570,7 +575,7 @@ public abstract class IntegrationTest extends TestUtils {
 
 	protected void enableDeobfuscation() {
 		args.setDeobfuscationOn(true);
-		args.setDeobfuscationMapFileMode(DeobfuscationMapFileMode.IGNORE);
+		args.setGeneratedRenamesMappingFileMode(GeneratedRenamesMappingFileMode.IGNORE);
 		args.setDeobfuscationMinLength(2);
 		args.setDeobfuscationMaxLength(64);
 	}
@@ -617,5 +622,49 @@ public abstract class IntegrationTest extends TestUtils {
 	// Use only for debug purpose
 	protected void saveTestJar() {
 		this.saveTestJar = true;
+	}
+
+	protected void addClsRename(String fullClsName, String newName) {
+		JadxNodeRef clsRef = JadxNodeRef.forCls(fullClsName);
+		getCodeData().getRenames().add(new JadxCodeRename(clsRef, newName));
+	}
+
+	protected void addMthRename(String fullClsName, String mthSignature, String newName) {
+		JadxNodeRef mthRef = new JadxNodeRef(IJavaNodeRef.RefType.METHOD, fullClsName, mthSignature);
+		getCodeData().getRenames().add(new JadxCodeRename(mthRef, newName));
+	}
+
+	protected void addFldRename(String fullClsName, String fldSignature, String newName) {
+		JadxNodeRef fldRef = new JadxNodeRef(IJavaNodeRef.RefType.FIELD, fullClsName, fldSignature);
+		getCodeData().getRenames().add(new JadxCodeRename(fldRef, newName));
+	}
+
+	protected JadxCodeData getCodeData() {
+		JadxCodeData codeData = (JadxCodeData) getArgs().getCodeData();
+		if (codeData == null) {
+			codeData = new JadxCodeData();
+			codeData.setRenames(new ArrayList<>());
+			codeData.setComments(new ArrayList<>());
+			getArgs().setCodeData(codeData);
+		}
+		return codeData;
+	}
+
+	protected JavaClass toJavaClass(ClassNode cls) {
+		JavaClass javaClass = JadxInternalAccess.convertClassNode(jadxDecompiler, cls);
+		assertThat(javaClass).isNotNull();
+		return javaClass;
+	}
+
+	protected JavaMethod toJavaMethod(MethodNode mth) {
+		JavaMethod javaMethod = JadxInternalAccess.convertMethodNode(jadxDecompiler, mth);
+		assertThat(javaMethod).isNotNull();
+		return javaMethod;
+	}
+
+	protected JavaVariable toJavaVariable(VarNode varNode) {
+		JavaVariable javaVariable = (JavaVariable) jadxDecompiler.getJavaNodeByCodeAnnotation(null, varNode);
+		assertThat(javaVariable).isNotNull();
+		return javaVariable;
 	}
 }

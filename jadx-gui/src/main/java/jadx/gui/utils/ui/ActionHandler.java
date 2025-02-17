@@ -5,7 +5,12 @@ import java.util.function.Consumer;
 
 import javax.swing.AbstractAction;
 import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.KeyStroke;
+
+import jadx.gui.utils.UiUtils;
+import jadx.gui.utils.shortcut.Shortcut;
 
 public class ActionHandler extends AbstractAction {
 
@@ -19,8 +24,23 @@ public class ActionHandler extends AbstractAction {
 		this.consumer = consumer;
 	}
 
+	public ActionHandler(String name, Runnable action) {
+		this(action);
+		setName(name);
+	}
+
+	public ActionHandler() {
+		this.consumer = ev -> {
+		};
+	}
+
 	public void setName(String name) {
 		putValue(NAME, name);
+	}
+
+	public ActionHandler withNameAndDesc(String name) {
+		setNameAndDesc(name);
+		return this;
 	}
 
 	public void setNameAndDesc(String name) {
@@ -40,8 +60,27 @@ public class ActionHandler extends AbstractAction {
 		putValue(ACCELERATOR_KEY, keyStroke);
 	}
 
+	public void attachKeyBindingFor(JComponent component, KeyStroke keyStroke) {
+		UiUtils.addKeyBinding(component, keyStroke, "run", this);
+		setKeyBinding(keyStroke);
+	}
+
+	public void addKeyBindToDescription() {
+		KeyStroke keyStroke = (KeyStroke) getValue(ACCELERATOR_KEY);
+		if (keyStroke != null) {
+			String keyText = Shortcut.keyboard(keyStroke.getKeyCode(), keyStroke.getModifiers()).toString();
+			String desc = (String) getValue(SHORT_DESCRIPTION);
+			setShortDescription(desc + " (" + keyText + ")");
+		}
+	}
+
 	@Override
 	public void actionPerformed(ActionEvent e) {
 		consumer.accept(e);
+	}
+
+	public JButton makeButton() {
+		addKeyBindToDescription();
+		return new JButton(this);
 	}
 }
